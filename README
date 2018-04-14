@@ -1,0 +1,19 @@
+Демон-сторожилка за событием удаления ip rule с prio 22000.
+
+ip rule prio 22000 в Android определяет какой default network будет использоваться.
+
+Данный демон отлавливаем момент когда Android изменяет default network на отличный
+от указанного в wd_table_file и восстанавливаем значение считываемое из wd_table_file
+путем выполнения команды ndc network default set $wd_network.
+
+Разрабатывался как вспомогательный демон для туннелей MSTP.
+
+--------------------------------------------------------------------------------------
+
+Guard demon for the event of removing ip rule with prio 22000.
+
+ip rule prio 22000 in Android determines which default network will be used.
+
+This daemon catches the moment when Android changes the default network to an different
+from the specified in wd_table_file and restore the value reading it from wd_table_file
+by executing the command ndc network default set $wd_network.
