@@ -2,8 +2,8 @@
 
 ip rule prio 22000 в Android определяет какой default network будет использоваться.
 
-Данный демон отлавливаем момент когда Android изменяет default network на отличный
-от указанного в wd_table_file и восстанавливаем значение считываемое из wd_table_file
+Данный демон отлавливает момент когда Android изменяет default network на отличный
+от указанного в wd_table_file и восстанавливает значение считываемое из wd_table_file
 путем выполнения команды ndc network default set $wd_network.
 
 Разрабатывался как вспомогательный демон для туннелей MSTP.
