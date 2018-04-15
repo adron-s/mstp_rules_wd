@@ -8,7 +8,7 @@ extern int need_exit; //флаг того что пора выходить
 //вызывается когда мы получаем сигнал kill
 static void sig_kill_handler(int sig_number){
 //  printf("Received kill signal. Begin exiting...\n");
-  need_exit=1;
+  need_exit = 1;
 }//-------------------------------------------------
 
 //**************************************************

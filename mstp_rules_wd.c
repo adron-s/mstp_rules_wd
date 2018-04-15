@@ -22,6 +22,7 @@
 int need_exit = 0; //еще не пора выходить
 char wd_table_file[255];
 
+#define SH_CMD "/system/xbin/sh"
 /* файл по умолчанию с охраняемой таблицей маршрутизации */
 #define DEFAULT_WD_TABLE_FILE "/data/local/mstp/default_table"
 /* константа взята из исходников netd. это prio рула, который
@@ -30,6 +31,10 @@ char wd_table_file[255];
 
 int print_rule(const struct sockaddr_nl *who,
 	       struct nlmsghdr *n, void *arg);
+
+int breakable_rtnl_listen(struct rtnl_handle *rtnl,
+		rtnl_listen_filter_t handler,
+		void *jarg);
 
 //*************************************************************************************
 static inline int rtm_get_table(struct rtmsg *r, struct rtattr **tb){
@@ -42,14 +47,14 @@ static inline int rtm_get_table(struct rtmsg *r, struct rtattr **tb){
 //*************************************************************************************
 /* так как system вызов не всегда на андроидах работает => я написал его заменитель */
 void exec_cmd(char *cmd){
-	char *new_argv[] = { cmd, NULL };
+	char *new_argv[] = { SH_CMD, "-c", cmd, NULL };
 	int pid = fork();
 	if(pid == 0){
 		//child
 		execvp(new_argv[0], new_argv);
 		perror("exec_cmd failed");
 		exit(-10);
-	}{
+	}else{
 		//parent
 		wait(NULL);
 		if(need_exit) //если нас попросили выйти то прибиваем нашего потомка
@@ -59,12 +64,13 @@ void exec_cmd(char *cmd){
 
 //*************************************************************************************
 /* считывает имя охраняемой таблицы из wd_table файла.
-	 в случае если файла нет вернет "\0". */
+	 в случае если файла нет => вернет "\0" */
 char *get_wd_table(int *network){
 	int fd;
 	static char res[255];
 	int len;
 	char *p = res;
+	char *tail = NULL;
 	res[0] = '\0';
 	fd = open(wd_table_file, O_RDONLY);
 	if(fd > 0){
@@ -76,17 +82,20 @@ char *get_wd_table(int *network){
 			res[len] = '\0'; //оконечим строку
 		close(fd);
 	}
-	//парсим
+	//парсим и заменяем '\n' -> '\0'
 	*network = 0;
 	for(; *p != '\0'; p++){
 		if(*p == '\n' || *p == ':'){
 			*p = '\0';
-			p++;
-			break;
+			if(!tail)
+				tail = p + 1;
 		}
+		//хвост должен содержать только цифры!
+		if(tail && (*p < '0' || *p > '9'))
+			*p = '\0';
 	}
-	if(*p)
-		*network = atoi(p);
+	if(*tail)
+		*network = atoi(tail);
 	return res;
 }//-----------------------------------------------------------------------------------
 
@@ -105,6 +114,9 @@ static int accept_msg(const struct sockaddr_nl *who,
 	char *wd_table_str;
 	int wd_network;
 	unsigned int prio = 0; //ip rule priority
+	//если нужно выходить - немедленно прекращаем цикл while(1) из rtnl_listen
+	if(need_exit)
+		return -100;
 	if (n->nlmsg_type == RTM_NEWRULE || n->nlmsg_type == RTM_DELRULE){
 #ifdef DEBUG
 		print_rule(who, n, arg); //для отладки. нужно раскоментить строчку в Android.mk
@@ -112,10 +124,10 @@ static int accept_msg(const struct sockaddr_nl *who,
 		if (n->nlmsg_type != RTM_DELRULE)
 			return 0; //нас интересуют только del rule
 		len -= NLMSG_LENGTH(sizeof(*r));
-		if (len < 0)
+		if(len < 0)
 			return 0;
 		parse_rtattr(tb, FRA_MAX, RTM_RTA(r), len);
-		if (tb[FRA_PRIORITY])
+		if(tb[FRA_PRIORITY])
 			prio = *(unsigned*)RTA_DATA(tb[FRA_PRIORITY]);
 		if(prio != RULE_PRIORITY_DEFAULT_NETWORK)
 			return 0; //нас интересуют только события для default network rula.
@@ -123,17 +135,22 @@ static int accept_msg(const struct sockaddr_nl *who,
 		if(table){
 			//получим название таблицы. в любом случае вернет строку!
 			table_str = rtnl_rttable_n2a(table, buf, sizeof(buf));
+			//получим название таблицы которую мы сторожим
 			wd_table_str = get_wd_table(&wd_network);
-			if(!wd_table_str[0])
+			if(!wd_table_str[0]) //если вообще есть что сторожить
 				return 0;
+			//сравним имена таблиц
 			if(strcmp(wd_table_str, table_str) != 0)
 				return 0;
-			//если мы дожили до сюда то rule для нашей wd_table с prio DEFAULT_NETWORK только что удалили
+			/* если мы дожили до сюда => rule для нашей wd_table с
+				 prio DEFAULT_NETWORK только был удалён ! */
 #ifdef DEBUG
-			printf("Ahhtung! our wd table %s(%d, %d) rule is deleted\n", wd_table_str, table, wd_network);
+			printf("Ahhtung! our wd table %s(%d, %d) rule is deleted\n",
+				wd_table_str, table, wd_network);
 #endif
 			if(wd_network > 0){ //восстанавливаем охраняемую сеть в качестве default
-				snprintf(buf, sizeof(buf), "ndc network default set %d >/dev/null 2>&1\n", wd_network);
+				snprintf(buf, sizeof(buf), "ndc network default set %d >/dev/null 2>&1\n",
+					wd_network);
 				exec_cmd(buf);
 			}
 		}
@@ -153,14 +170,15 @@ int main(int argc, char **argv){
 		strncpy(wd_table_file, argv[1], sizeof(wd_table_file) - 1);
 	//нам интересны только события для ip rule
 	groups |= nl_mgrp(RTNLGRP_IPV4_RULE);
-	if (rtnl_open(&rth, groups) < 0)
-		exit(1);
+	if (rtnl_open(&rth, groups) < 0){
+		perror("Cannot open netlink socket");
+		return -1;
+	}
 	/* инит библиотеки ll. наверное он тут не нужен но пусть будет.
 		 в iproute2 везде он есть где делается open. */
 	ll_init_map(&rth);
 	//слушаем сокет и вызываем обработчик для каждого принятого событи
-	rtnl_listen(&rth, accept_msg, stdout);
-	printf("The end...!\n");
+	breakable_rtnl_listen(&rth, accept_msg, stdout);
 	rtnl_close(&rth);
 	return 0;
 }
