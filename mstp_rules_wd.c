@@ -149,7 +149,7 @@ static int accept_msg(const struct sockaddr_nl *who,
 				wd_table_str, table, wd_network);
 #endif
 			if(wd_network > 0){ //восстанавливаем охраняемую сеть в качестве default
-				snprintf(buf, sizeof(buf), "ndc network default set %d >/dev/null 2>&1\n",
+				snprintf(buf, sizeof(buf), "ndc network default set oem%d >/dev/null 2>&1\n",
 					wd_network);
 				exec_cmd(buf);
 			}
