@@ -65,7 +65,7 @@ void exec_cmd(char *cmd){
 //*************************************************************************************
 /* считывает имя охраняемой таблицы из wd_table файла.
 	 в случае если файла нет => вернет "\0" */
-char *get_wd_table(int *network){
+char *get_wd_table(char **network){
 	int fd;
 	static char res[255];
 	int len;
@@ -83,19 +83,21 @@ char *get_wd_table(int *network){
 		close(fd);
 	}
 	//парсим и заменяем '\n' -> '\0'
-	*network = 0;
 	for(; *p != '\0'; p++){
 		if(*p == '\n' || *p == ':'){
 			*p = '\0';
 			if(!tail)
 				tail = p + 1;
 		}
-		//хвост должен содержать только цифры!
-		if(tail && (*p < '0' || *p > '9'))
-			*p = '\0';
 	}
-	if(*tail)
-		*network = atoi(tail);
+	*network = tail;
+	if(!tail){ //если хвост так и не был найден!
+		*network = res; //значит структура wd_table файла ошибочна!
+		memset(res, 0x0, sizeof(res));
+#ifdef DEBUG
+		printf("Warning! wd_table_file struct is CORRUPTED!\n");
+#endif
+	}
 	return res;
 }//-----------------------------------------------------------------------------------
 
@@ -112,7 +114,7 @@ static int accept_msg(const struct sockaddr_nl *who,
 	char buf[255];
 	const char *table_str;
 	char *wd_table_str;
-	int wd_network;
+	char *wd_network_str;
 	unsigned int prio = 0; //ip rule priority
 	//если нужно выходить - немедленно прекращаем цикл while(1) из rtnl_listen
 	if(need_exit)
@@ -135,8 +137,8 @@ static int accept_msg(const struct sockaddr_nl *who,
 		if(table){
 			//получим название таблицы. в любом случае вернет строку!
 			table_str = rtnl_rttable_n2a(table, buf, sizeof(buf));
-			//получим название таблицы которую мы сторожим
-			wd_table_str = get_wd_table(&wd_network);
+			//получим название таблицы которую мы сторожим и имя сети(oemX) для этой таблицы
+			wd_table_str = get_wd_table(&wd_network_str);
 			if(!wd_table_str[0]) //если вообще есть что сторожить
 				return 0;
 			//сравним имена таблиц
@@ -145,12 +147,12 @@ static int accept_msg(const struct sockaddr_nl *who,
 			/* если мы дожили до сюда => rule для нашей wd_table с
 				 prio DEFAULT_NETWORK только был удалён ! */
 #ifdef DEBUG
-			printf("Ahhtung! our wd table %s(%d, %d) rule is deleted\n",
-				wd_table_str, table, wd_network);
+			printf("Ahhtung! our wd table %s(%d), rule is deleted! network := %s\n",
+				wd_table_str, table, wd_network_str);
 #endif
-			if(wd_network > 0){ //восстанавливаем охраняемую сеть в качестве default
-				snprintf(buf, sizeof(buf), "ndc network default set oem%d >/dev/null 2>&1\n",
-					wd_network);
+			if(wd_network_str[0]){ //восстанавливаем охраняемую сеть в качестве default
+				snprintf(buf, sizeof(buf), "ndc network default set %s >/dev/null 2>&1\n",
+					wd_network_str);
 				exec_cmd(buf);
 			}
 		}
