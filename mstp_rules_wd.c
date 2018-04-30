@@ -23,8 +23,12 @@ int need_exit = 0; //еще не пора выходить
 char wd_table_file[255];
 
 #define SH_CMD "/system/xbin/sh"
+/* директория где находится mstp */
+#define MSTP_DIR "/data/local/mstp"
 /* файл по умолчанию с охраняемой таблицей маршрутизации */
-#define DEFAULT_WD_TABLE_FILE "/data/local/mstp/default_table"
+#define DEFAULT_WD_TABLE_FILE MSTP_DIR "/default_table"
+/* наш pid файл */
+#define PID_FILE MSTP_DIR "/run/mstp-rules-wd.pid"
 /* константа взята из исходников netd. это prio рула, который
 	 используется для назначения default network */
 #define RULE_PRIORITY_DEFAULT_NETWORK 22000
@@ -161,6 +165,23 @@ static int accept_msg(const struct sockaddr_nl *who,
 	return 0;
 }//-----------------------------------------------------------------------------------
 
+//*************************************************************************************
+/* выполняет запись нашего PID-а в файл */
+void write_pid(void){
+	int fd;
+	char pid[20];
+	fd = creat(PID_FILE, O_WRONLY);
+	if(fd < 0){
+		perror("Can't create pid file");
+		return;
+	}
+	snprintf(pid, sizeof(pid), "%d", getpid());
+	if(write(fd, pid, strlen(pid)) <= 0){
+		perror("Can't write pid to file");
+	}
+	close(fd);
+}//-----------------------------------------------------------------------------------
+
 int main(int argc, char **argv){
 	struct rtnl_handle rth;
 	unsigned groups = 0;
@@ -172,15 +193,19 @@ int main(int argc, char **argv){
 		strncpy(wd_table_file, argv[1], sizeof(wd_table_file) - 1);
 	//нам интересны только события для ip rule
 	groups |= nl_mgrp(RTNLGRP_IPV4_RULE);
-	if (rtnl_open(&rth, groups) < 0){
-		perror("Cannot open netlink socket");
-		return -1;
+	write_pid();
+	while(!need_exit){
+		if (rtnl_open(&rth, groups) < 0){
+			perror("Cannot open netlink socket");
+			return -1;
+		}
+		/* инит библиотеки ll. наверное он тут не нужен но пусть будет.
+			 в iproute2 везде он есть где делается open. */
+		ll_init_map(&rth);
+		//слушаем сокет и вызываем обработчик для каждого принятого события
+		breakable_rtnl_listen(&rth, accept_msg, stdout);
+		rtnl_close(&rth);
 	}
-	/* инит библиотеки ll. наверное он тут не нужен но пусть будет.
-		 в iproute2 везде он есть где делается open. */
-	ll_init_map(&rth);
-	//слушаем сокет и вызываем обработчик для каждого принятого событи
-	breakable_rtnl_listen(&rth, accept_msg, stdout);
-	rtnl_close(&rth);
+	unlink(PID_FILE);
 	return 0;
 }
