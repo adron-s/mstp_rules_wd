@@ -17,6 +17,11 @@ LOCAL_SHARED_LIBRARIES := libnetlink libiprouteutil
 LOCAL_MODULE := mstp_rules_wd
 #src файлы
 LOCAL_SRC_FILES := libnetlink_modif.c mstp_rules_wd.c
+#борьба с багом линкера unsupported flags DT_FLAGS_1=0x8000001
+ifeq ($(APP_ABI),arm64-v8a)
+	LOCAL_LDFLAGS += -fuse-ld=gold
+endif
+
 ifdef DEBUG
   #так же добавим необходимые файлы из iproute2. они необходимы только для работы print_rule.
   LOCAL_SRC_FILES := $(LOCAL_SRC_FILES) $(IPROUTE2_PATH)/ip/iprule.c $(IPROUTE2_PATH)/ip/rtm_map.c
