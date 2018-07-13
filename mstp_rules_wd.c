@@ -131,7 +131,6 @@ static int accept_msg(const struct sockaddr_nl *who,
 	struct rtmsg *r = NLMSG_DATA(n);
 	int len = n->nlmsg_len;
 	struct rtattr *tb[FRA_MAX + 1];
-	__u32 table;
 	char buf[255];
 	const char *table_str;
 	/* эти значения актуальны ~только~ если wd_table > 0 ! */
