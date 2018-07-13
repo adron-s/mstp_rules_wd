@@ -21,12 +21,12 @@
 
 int need_exit = 0; //еще не пора выходить
 char wd_table_file[255];
-//id таблицы которую мы сторожим или 0 если ничего сторожить не нужно
-static __u32 wd_table = 0;
 
-#define SH_CMD "/system/xbin/sh"
 /* директория где находится mstp */
 #define MSTP_DIR "/data/local/mstp"
+#define MSTP_BIAND_DIR MSTP_DIR "/bin/android"
+#define SH_CMD MSTP_BIAND_DIR "/sh"
+#define NDC_CMD MSTP_BIAND_DIR "/ndc"
 /* файл по умолчанию с охраняемой таблицей маршрутизации */
 #define DEFAULT_WD_TABLE_FILE MSTP_DIR "/default_table"
 /* наш pid файл */
@@ -75,7 +75,7 @@ void exec_cmd(char *cmd){
 #ifdef DEBUG
 #define PRINTD(format, args...) { 								 \
 	fprintf(stdout, format, ##args); 								 \
-	fflush(stdout);																	 \
+	fflush(stdout); 																 \
 }
 #else
 #define PRINTD(...)
@@ -103,7 +103,6 @@ char *get_wd_table(char **network){
 		close(fd);
 	}else{
 		//а файла то и нет => и охранять нечего.
-		wd_table = 0;
 		*network = res;
 		return res;
 	}
@@ -152,47 +151,20 @@ static int accept_msg(const struct sockaddr_nl *who,
 		parse_rtattr(tb, FRA_MAX, RTM_RTA(r), len);
 		if(tb[FRA_PRIORITY])
 			prio = *(unsigned*)RTA_DATA(tb[FRA_PRIORITY]);
-		//если это событие add/del: from all oif xxx lookup table xxx
-		if(prio == RULE_PRIORITY_OUTPUT_INTERFACE){
-			if(n->nlmsg_type == RTM_NEWRULE){ /* NEWRULE */
-				//получим название таблицы которую мы сторожим и имя сети(oemX) для этой таблицы
-				wd_table_str = get_wd_table(&wd_network_str);
-				if(tb[FRA_OIFNAME]){
-					//сравним имена интерфейсов. в данном случае они == именам таблиц.
-					if(strcmp(wd_table_str, rta_getattr_str(tb[FRA_OIFNAME])) != 0)
-						return 0;
-					//имена совпали ! запоминаем id таблицы которую мы теперь сторожим.
-					wd_table = rtm_get_table(r, tb);
-					PRINTD("new wd_table for network %s is %d(%s)\n",
-						wd_network_str, wd_table, wd_table_str);
-					return 0;
-				}
-			}else{ /* DELRULE */
-				//если удаляют наш туннель. сторожить пока не нужно.
-				if(wd_table == rtm_get_table(r, tb)){
-					wd_table = 0;
-					PRINTD("new wd_table := 0\n");
-				}
-			}
-		}
-		if(n->nlmsg_type == RTM_DELRULE){
-			if(prio != RULE_PRIORITY_DEFAULT_NETWORK)
+		//если это событие add/del: 22000: from all fwmark 0x0/0xffff lookup table xxx
+		if(prio != RULE_PRIORITY_DEFAULT_NETWORK)
 				return 0; //нас интересуют только события для default network rula.
-			if(!wd_table) //если таблицы которую мы сторожим не установлена
-				return 0;
-			table = rtm_get_table(r, tb);
-			if(table == wd_table){
-				/* rule для нашей wd_table с prio DEFAULT_NETWORK только был удалён ! */
-				PRINTD("Ahhtung! our wd table %s(%d), rule is deleted! network := %s\n",
-					wd_table_str, wd_table, wd_network_str);
-				if(wd_network_str[0]){ //восстанавливаем охраняемую сеть в качестве default
-					snprintf(buf, sizeof(buf), "ndc network default set %s >/dev/null 2>&1\n",
-						wd_network_str);
-					exec_cmd(buf);
-				}
-			}
-			return 0;
-		}
+		//получим название таблицы которую мы сторожим и имя сети(oemX) для этой таблицы
+		wd_table_str = get_wd_table(&wd_network_str);
+		if(wd_table_str[0] == '\0')
+			return 0; //охраняемая таблица не задана
+		/* по любому чиху в 22000 руле запускаем восстанавление охраняемой сети
+			 в качестве default. лишний раз оно не повредит т.к. ndc умный. тут лучше
+			 перебдеть чем недобдеть :-) */
+		snprintf(buf, sizeof(buf), "%s network default set %s >/dev/null 2>&1\n",
+			NDC_CMD, wd_network_str);
+		PRINTD("Executing our cmd %s\n", buf);
+		exec_cmd(buf);
 	}
 	return 0;
 }//-----------------------------------------------------------------------------------

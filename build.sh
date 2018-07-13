@@ -6,6 +6,9 @@ ARCH=arm64
 #for android 7.1.1
 API=24
 
+#for android 6.0.1
+#API=23
+
 #for android 5.1
 #API=22
 #CLEAN_DT_ENTRYS="true"
